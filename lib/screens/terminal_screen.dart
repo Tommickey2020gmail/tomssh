@@ -6,6 +6,7 @@ import 'package:xterm/xterm.dart';
 import '../models/server_config.dart';
 import '../providers/providers.dart';
 import '../services/ssh_service.dart';
+import '../widgets/virtual_keyboard.dart';
 
 /// Holds the state for a single terminal tab/session.
 class _TerminalTab {
@@ -294,15 +295,22 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
               )
             : null,
       ),
-      body: TabBarView(
-        controller: _tabController,
-        physics: const NeverScrollableScrollPhysics(),
-        children: _tabs.map((tab) {
-          return TerminalView(
-            tab.terminal,
-            autofocus: true,
-          );
-        }).toList(),
+      body: Column(
+        children: [
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              physics: const NeverScrollableScrollPhysics(),
+              children: _tabs.map((tab) {
+                return TerminalView(
+                  tab.terminal,
+                  autofocus: true,
+                );
+              }).toList(),
+            ),
+          ),
+          VirtualKeyboard(terminal: _tabs[_tabController!.index].terminal),
+        ],
       ),
     );
   }
