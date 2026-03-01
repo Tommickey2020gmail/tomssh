@@ -9,6 +9,7 @@ class ServerConfig {
   final AuthType authType;
   final int? groupId;
   final int sortOrder;
+  final bool useTmux;
 
   ServerConfig({
     this.id,
@@ -19,6 +20,7 @@ class ServerConfig {
     required this.authType,
     this.groupId,
     this.sortOrder = 0,
+    this.useTmux = false,
   });
 
   Map<String, dynamic> toMap() => {
@@ -30,6 +32,7 @@ class ServerConfig {
         'auth_type': authType.name,
         'group_id': groupId,
         'sort_order': sortOrder,
+        'use_tmux': useTmux ? 1 : 0,
       };
 
   factory ServerConfig.fromMap(Map<String, dynamic> map) => ServerConfig(
@@ -41,6 +44,7 @@ class ServerConfig {
         authType: AuthType.values.byName(map['auth_type'] as String),
         groupId: map['group_id'] as int?,
         sortOrder: map['sort_order'] as int? ?? 0,
+        useTmux: (map['use_tmux'] as int?) == 1,
       );
 
   ServerConfig copyWith({
@@ -52,6 +56,7 @@ class ServerConfig {
     AuthType? authType,
     int? groupId,
     int? sortOrder,
+    bool? useTmux,
   }) =>
       ServerConfig(
         id: id ?? this.id,
@@ -62,5 +67,6 @@ class ServerConfig {
         authType: authType ?? this.authType,
         groupId: groupId ?? this.groupId,
         sortOrder: sortOrder ?? this.sortOrder,
+        useTmux: useTmux ?? this.useTmux,
       );
 }

@@ -182,6 +182,14 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
           tab.status = 'connected';
           tab.reconnectAttempts = 0; // Reset on successful connection
         });
+
+        // Auto-attach to tmux session if enabled
+        if (tab.server.useTmux) {
+          // Short delay to let shell initialize
+          await Future.delayed(const Duration(milliseconds: 500));
+          final sessionName = 'tomssh_${tab.server.name.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_')}';
+          tab.ssh.write('tmux new-session -A -s $sessionName\n');
+        }
       }
     } catch (e) {
       if (mounted) {

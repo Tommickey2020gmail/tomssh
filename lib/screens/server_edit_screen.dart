@@ -29,6 +29,7 @@ class _ServerEditScreenState extends ConsumerState<ServerEditScreen> {
 
   late AuthType _authType;
   int? _groupId;
+  bool _useTmux = false;
   bool _saving = false;
   bool _loadingCredentials = true;
 
@@ -46,6 +47,7 @@ class _ServerEditScreenState extends ConsumerState<ServerEditScreen> {
     _privateKeyController = TextEditingController();
     _authType = s?.authType ?? AuthType.password;
     _groupId = s?.groupId;
+    _useTmux = s?.useTmux ?? false;
 
     if (_isEditing) {
       _loadCredentials();
@@ -97,6 +99,7 @@ class _ServerEditScreenState extends ConsumerState<ServerEditScreen> {
         authType: _authType,
         groupId: _groupId,
         sortOrder: widget.server?.sortOrder ?? 0,
+        useTmux: _useTmux,
       );
 
       int serverId;
@@ -258,6 +261,14 @@ class _ServerEditScreenState extends ConsumerState<ServerEditScreen> {
                   Text(
                     'Authentication',
                     style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('使用 tmux 保持会话'),
+                    subtitle: const Text('断连后进程继续运行，重连自动恢复'),
+                    value: _useTmux,
+                    onChanged: (v) => setState(() => _useTmux = v),
                   ),
                   const SizedBox(height: 8),
                   SizedBox(

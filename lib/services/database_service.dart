@@ -15,7 +15,7 @@ class DatabaseService {
   Future<Database> _initDatabase() async {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, 'tomssh.db');
-    return openDatabase(path, version: 2,
+    return openDatabase(path, version: 3,
         onCreate: _onCreate, onUpgrade: _onUpgrade);
   }
 
@@ -37,6 +37,7 @@ class DatabaseService {
         auth_type TEXT NOT NULL,
         group_id INTEGER,
         sort_order INTEGER DEFAULT 0,
+        use_tmux INTEGER DEFAULT 0,
         FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL
       )
     ''');
@@ -46,6 +47,9 @@ class DatabaseService {
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       await _createCommandsTable(db);
+    }
+    if (oldVersion < 3) {
+      await db.execute('ALTER TABLE servers ADD COLUMN use_tmux INTEGER DEFAULT 0');
     }
   }
 
