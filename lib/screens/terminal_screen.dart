@@ -247,6 +247,49 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   }
 
   /// Shows the quick commands bottom sheet and sends selected command.
+  /// Shows a multi-line text input dialog and sends content to terminal.
+  void _showTextInput() async {
+    if (_tabController == null || _tabs.isEmpty) return;
+    final controller = TextEditingController();
+    final text = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('大段文本输入'),
+        content: TextField(
+          controller: controller,
+          maxLines: 10,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '粘贴或输入多行文本...',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('发送'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (text != null && text.isNotEmpty && mounted) {
+      final tab = _tabs[_tabController!.index];
+      // Send line by line to simulate typing
+      final lines = text.split('\n');
+      for (var i = 0; i < lines.length; i++) {
+        tab.ssh.write(lines[i]);
+        if (i < lines.length - 1) {
+          tab.ssh.write('\n');
+        }
+      }
+    }
+  }
+
   void _showQuickCommands() async {
     if (_tabController == null || _tabs.isEmpty) return;
     final db = ref.read(databaseServiceProvider);
@@ -296,6 +339,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
       appBar: AppBar(
         title: Text(_tabs[_tabController!.index].server.name),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.edit_note),
+            tooltip: '大段文本输入',
+            onPressed: _showTextInput,
+          ),
           IconButton(
             icon: const Icon(Icons.list_alt),
             tooltip: '常用命令',
