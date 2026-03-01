@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:dartssh2/dartssh2.dart';
@@ -6,6 +7,7 @@ import '../models/server_config.dart';
 class SSHService {
   SSHClient? _client;
   SSHSession? _shell;
+  StreamSubscription? _stdoutSubscription;
   bool _isConnected = false;
 
   bool get isConnected => _isConnected;
@@ -45,7 +47,8 @@ class SSHService {
 
       _isConnected = true;
 
-      _shell!.stdout.listen(
+      _stdoutSubscription?.cancel();
+      _stdoutSubscription = _shell!.stdout.listen(
         (data) => onData(utf8.decode(data, allowMalformed: true)),
         onError: (e) => onError(e.toString()),
         onDone: () {
@@ -69,6 +72,8 @@ class SSHService {
   }
 
   void disconnect() {
+    _stdoutSubscription?.cancel();
+    _stdoutSubscription = null;
     _shell?.close();
     _client?.close();
     _isConnected = false;
