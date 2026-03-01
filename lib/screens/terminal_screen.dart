@@ -249,7 +249,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   /// Shows the quick commands bottom sheet and sends selected command.
   /// Shows a multi-line text input dialog and sends content to terminal.
   void _showTextInput() async {
-    if (_tabController == null || _tabs.isEmpty) return;
+    if (_tabs.isEmpty) return;
     final controller = TextEditingController();
     final text = await showDialog<String>(
       context: context,
@@ -277,8 +277,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
       ),
     );
     controller.dispose();
-    if (text != null && text.isNotEmpty && mounted) {
-      final tab = _tabs[_tabController!.index];
+    if (text != null && text.isNotEmpty && mounted && _tabs.isNotEmpty) {
+      final tab = _tabs[_safeIndex];
       // Send line by line to simulate typing
       final lines = text.split('\n');
       for (var i = 0; i < lines.length; i++) {
@@ -291,23 +291,23 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   }
 
   void _showQuickCommands() async {
-    if (_tabController == null || _tabs.isEmpty) return;
+    if (_tabs.isEmpty) return;
     final db = ref.read(databaseServiceProvider);
     final command = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       builder: (_) => QuickCommandsSheet(db: db),
     );
-    if (command != null && mounted) {
-      final tab = _tabs[_tabController!.index];
+    if (command != null && mounted && _tabs.isNotEmpty) {
+      final tab = _tabs[_safeIndex];
       tab.ssh.write('$command\n');
     }
   }
 
   /// Disconnects and reconnects the currently active tab.
   void _reconnectCurrentTab() {
-    if (_tabController == null || _tabs.isEmpty) return;
-    final tab = _tabs[_tabController!.index];
+    if (_tabs.isEmpty) return;
+    final tab = _tabs[_safeIndex];
     tab.cancelReconnect();
     tab.reconnectAttempts = 0; // Reset attempts for manual reconnect
     tab.ssh.disconnect();
@@ -327,6 +327,12 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     }
   }
 
+  /// Safe accessor for the current tab index.
+  int get _safeIndex {
+    if (_tabController == null || _tabs.isEmpty) return 0;
+    return _tabController!.index.clamp(0, _tabs.length - 1);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_tabs.isEmpty || _tabController == null) {
@@ -335,9 +341,12 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
       );
     }
 
+    final currentIndex = _safeIndex;
+    final currentTab = _tabs[currentIndex];
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(_tabs[_tabController!.index].server.name),
+        title: Text(currentTab.server.name),
         actions: [
           IconButton(
             icon: const Icon(Icons.edit_note),
@@ -405,7 +414,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
               }).toList(),
             ),
           ),
-          VirtualKeyboard(terminal: _tabs[_tabController!.index].terminal),
+          VirtualKeyboard(terminal: currentTab.terminal),
         ],
       ),
     );
