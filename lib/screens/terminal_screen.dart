@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:xterm/xterm.dart';
@@ -12,12 +13,20 @@ class _TerminalTab {
   final Terminal terminal;
   final SSHService ssh;
   String status;
+  int reconnectAttempts;
+  Timer? reconnectTimer;
 
   _TerminalTab({
     required this.server,
     required this.terminal,
     required this.ssh,
-  }) : status = 'connecting';
+  })  : status = 'connecting',
+        reconnectAttempts = 0;
+
+  void cancelReconnect() {
+    reconnectTimer?.cancel();
+    reconnectTimer = null;
+  }
 }
 
 /// Multi-tab SSH terminal screen.
@@ -47,7 +56,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   @override
   void dispose() {
     for (final tab in _tabs) {
-      tab.ssh.disconnect();
+      tab.cancelReconnect();
+      tab.ssh.disconnect(manual: true);
     }
     _tabController?.dispose();
     super.dispose();
@@ -99,8 +109,12 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     _connectTab(tab);
   }
 
+  static const int _maxReconnectAttempts = 10;
+
   /// Connects (or reconnects) a single tab's SSH session.
   Future<void> _connectTab(_TerminalTab tab) async {
+    tab.cancelReconnect();
+
     setState(() {
       tab.status = 'connecting';
     });
@@ -134,6 +148,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
               tab.status = 'disconnected';
             });
             tab.terminal.write('\r\n[Connection closed]\r\n');
+            // Auto-reconnect if not manually disconnected
+            if (!tab.ssh.wasManualDisconnect) {
+              _scheduleReconnect(tab);
+            }
           }
         },
       );
@@ -141,6 +159,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
       if (mounted) {
         setState(() {
           tab.status = 'connected';
+          tab.reconnectAttempts = 0; // Reset on successful connection
         });
       }
     } catch (e) {
@@ -149,14 +168,39 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
           tab.status = 'error';
         });
         tab.terminal.write('\r\nFailed to connect: $e\r\n');
+        // Auto-reconnect on connection failure too
+        if (!tab.ssh.wasManualDisconnect) {
+          _scheduleReconnect(tab);
+        }
       }
     }
+  }
+
+  /// Schedules an auto-reconnect with exponential backoff.
+  void _scheduleReconnect(_TerminalTab tab) {
+    if (!mounted) return;
+    if (tab.reconnectAttempts >= _maxReconnectAttempts) {
+      tab.terminal.write('[Auto-reconnect gave up after $_maxReconnectAttempts attempts. Tap refresh to reconnect manually.]\r\n');
+      return;
+    }
+
+    tab.reconnectAttempts++;
+    // Backoff: 2s, 4s, 6s, 8s, 10s, ... capped at 30s
+    final delay = Duration(seconds: (tab.reconnectAttempts * 2).clamp(2, 30));
+    tab.terminal.write('[Auto-reconnect in ${delay.inSeconds}s (attempt ${tab.reconnectAttempts}/$_maxReconnectAttempts)...]\r\n');
+
+    tab.reconnectTimer = Timer(delay, () {
+      if (mounted && !tab.ssh.wasManualDisconnect) {
+        _connectTab(tab);
+      }
+    });
   }
 
   /// Closes the tab at [index], disconnecting its SSH session.
   void _closeTab(int index) {
     final tab = _tabs[index];
-    tab.ssh.disconnect();
+    tab.cancelReconnect();
+    tab.ssh.disconnect(manual: true);
 
     setState(() {
       _tabs.removeAt(index);
@@ -177,6 +221,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   void _reconnectCurrentTab() {
     if (_tabController == null || _tabs.isEmpty) return;
     final tab = _tabs[_tabController!.index];
+    tab.cancelReconnect();
+    tab.reconnectAttempts = 0; // Reset attempts for manual reconnect
     tab.ssh.disconnect();
     tab.terminal.write('\r\nReconnecting...\r\n');
     _connectTab(tab);

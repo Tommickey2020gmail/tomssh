@@ -9,6 +9,7 @@ class SSHService {
   SSHSession? _shell;
   StreamSubscription? _stdoutSubscription;
   bool _isConnected = false;
+  bool _manualDisconnect = false;
 
   bool get isConnected => _isConnected;
 
@@ -20,19 +21,22 @@ class SSHService {
     required void Function(String) onError,
     required void Function() onDone,
   }) async {
+    _manualDisconnect = false;
     try {
       final socket = await SSHSocket.connect(server.host, server.port,
-          timeout: const Duration(seconds: 10));
+          timeout: const Duration(seconds: 15));
 
       if (server.authType == AuthType.password && password != null) {
         _client = SSHClient(socket,
           username: server.username,
           onPasswordRequest: () => password,
+          keepAliveInterval: const Duration(seconds: 5),
         );
       } else if (server.authType == AuthType.key && privateKey != null) {
         _client = SSHClient(socket,
           username: server.username,
           identities: [...SSHKeyPair.fromPem(privateKey)],
+          keepAliveInterval: const Duration(seconds: 5),
         );
       } else {
         throw Exception('Missing credentials');
@@ -71,11 +75,16 @@ class SSHService {
     _shell?.resizeTerminal(width, height);
   }
 
-  void disconnect() {
+  /// If [manual] is true, auto-reconnect will not trigger.
+  void disconnect({bool manual = false}) {
+    _manualDisconnect = manual;
     _stdoutSubscription?.cancel();
     _stdoutSubscription = null;
     _shell?.close();
     _client?.close();
     _isConnected = false;
   }
+
+  /// Whether the last disconnect was triggered manually by the user.
+  bool get wasManualDisconnect => _manualDisconnect;
 }
