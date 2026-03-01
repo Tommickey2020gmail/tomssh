@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:xterm/xterm.dart';
 
 import '../models/server_config.dart';
 import '../providers/providers.dart';
 import '../services/ssh_service.dart';
+import '../widgets/quick_commands_sheet.dart';
 import '../widgets/virtual_keyboard.dart';
 
 /// Holds the state for a single terminal tab/session.
@@ -44,24 +46,42 @@ class TerminalScreen extends ConsumerStatefulWidget {
 }
 
 class _TerminalScreenState extends ConsumerState<TerminalScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   final List<_TerminalTab> _tabs = [];
   TabController? _tabController;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WakelockPlus.enable();
     _addTab(widget.server);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    WakelockPlus.disable();
     for (final tab in _tabs) {
       tab.cancelReconnect();
       tab.ssh.disconnect(manual: true);
     }
     _tabController?.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // App came back to foreground — check all tabs and reconnect if needed
+      for (final tab in _tabs) {
+        if (!tab.ssh.isConnected && tab.status != 'connecting') {
+          tab.terminal.write('\r\n[App resumed, reconnecting...]\r\n');
+          tab.reconnectAttempts = 0;
+          _connectTab(tab);
+        }
+      }
+    }
   }
 
   /// Rebuilds the [TabController] to match the current number of tabs.
@@ -218,6 +238,21 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     });
   }
 
+  /// Shows the quick commands bottom sheet and sends selected command.
+  void _showQuickCommands() async {
+    if (_tabController == null || _tabs.isEmpty) return;
+    final db = ref.read(databaseServiceProvider);
+    final command = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => QuickCommandsSheet(db: db),
+    );
+    if (command != null && mounted) {
+      final tab = _tabs[_tabController!.index];
+      tab.ssh.write('$command\n');
+    }
+  }
+
   /// Disconnects and reconnects the currently active tab.
   void _reconnectCurrentTab() {
     if (_tabController == null || _tabs.isEmpty) return;
@@ -253,6 +288,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
       appBar: AppBar(
         title: Text(_tabs[_tabController!.index].server.name),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.list_alt),
+            tooltip: '常用命令',
+            onPressed: _showQuickCommands,
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Reconnect',
