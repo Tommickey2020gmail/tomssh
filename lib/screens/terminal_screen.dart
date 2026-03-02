@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:ui' as ui;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -6,6 +8,7 @@ import 'package:xterm/xterm.dart';
 
 import '../models/server_config.dart';
 import '../providers/providers.dart';
+import '../services/session_log_service.dart';
 import '../services/ssh_service.dart';
 import '../widgets/quick_commands_sheet.dart';
 import '../widgets/virtual_keyboard.dart';
@@ -15,6 +18,7 @@ class _TerminalTab {
   final ServerConfig server;
   final Terminal terminal;
   final SSHService ssh;
+  final SessionLogService logService;
   String status;
   int reconnectAttempts;
   Timer? reconnectTimer;
@@ -23,12 +27,17 @@ class _TerminalTab {
     required this.server,
     required this.terminal,
     required this.ssh,
+    required this.logService,
   })  : status = 'connecting',
         reconnectAttempts = 0;
 
   void cancelReconnect() {
     reconnectTimer?.cancel();
     reconnectTimer = null;
+  }
+
+  Future<void> closeLog() async {
+    await logService.close();
   }
 }
 
@@ -65,6 +74,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     for (final tab in _tabs) {
       tab.cancelReconnect();
       tab.ssh.disconnect(manual: true);
+      tab.closeLog();
     }
     _tabController?.dispose();
     super.dispose();
@@ -103,14 +113,19 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
 
   /// Adds a new tab for the given server and initiates the SSH connection.
   void _addTab(ServerConfig server) {
-    final terminal = Terminal(maxLines: 10000);
+    final terminal = Terminal(maxLines: 50000);
     final ssh = SSHService();
+    final logService = SessionLogService(server.name);
 
     final tab = _TerminalTab(
       server: server,
       terminal: terminal,
       ssh: ssh,
+      logService: logService,
     );
+
+    // Init log service asynchronously.
+    logService.init();
 
     setState(() {
       _tabs.add(tab);
@@ -159,6 +174,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
         privateKey: privateKey,
         onData: (data) {
           tab.terminal.write(data);
+          tab.logService.write(data);
         },
         onError: (error) {
           tab.terminal.write('\r\nError: $error\r\n');
@@ -230,6 +246,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     final tab = _tabs[index];
     tab.cancelReconnect();
     tab.ssh.disconnect(manual: true);
+    tab.closeLog();
 
     setState(() {
       _tabs.removeAt(index);
@@ -247,39 +264,71 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   }
 
   /// Shows the quick commands bottom sheet and sends selected command.
-  /// Shows a multi-line text input dialog and sends content to terminal.
+  /// Shows a multi-line text input bottom sheet and sends content to terminal.
   void _showTextInput() async {
     if (_tabs.isEmpty) return;
     final controller = TextEditingController();
-    final text = await showDialog<String>(
+    final text = await showModalBottomSheet<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('大段文本输入'),
-        content: TextField(
-          controller: controller,
-          maxLines: 10,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: '粘贴或输入多行文本...',
-            border: OutlineInputBorder(),
+      isScrollControlled: true,
+      builder: (ctx) {
+        final bottomInset = MediaQuery.of(ctx).viewInsets.bottom;
+        return AnimatedPadding(
+          duration: const Duration(milliseconds: 100),
+          padding: EdgeInsets.only(
+            bottom: bottomInset,
+            left: 16,
+            right: 16,
+            top: 16,
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const Text('大段文本输入',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(ctx).pop();
+                    },
+                    child: const Text('取消'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: () {
+                      final value = controller.text;
+                      Navigator.of(ctx).pop(value);
+                    },
+                    child: const Text('发送'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: controller,
+                maxLines: 8,
+                minLines: 3,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: '粘贴或输入多行文本...',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('发送'),
-          ),
-        ],
-      ),
+        );
+      },
     );
-    controller.dispose();
+    // Dispose after a frame to avoid race with sheet exit animation
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      controller.dispose();
+    });
     if (text != null && text.isNotEmpty && mounted && _tabs.isNotEmpty) {
       final tab = _tabs[_safeIndex];
-      // Send line by line to simulate typing
       final lines = text.split('\n');
       for (var i = 0; i < lines.length; i++) {
         tab.ssh.write(lines[i]);
@@ -407,15 +456,67 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
               controller: _tabController,
               physics: const NeverScrollableScrollPhysics(),
               children: _tabs.map((tab) {
-                return TerminalView(
-                  tab.terminal,
-                  autofocus: true,
-                );
+                return _TouchScrollableTerminal(terminal: tab.terminal);
               }).toList(),
             ),
           ),
           VirtualKeyboard(terminal: currentTab.terminal),
         ],
+      ),
+    );
+  }
+}
+
+/// Wraps [TerminalView] with a [Listener] that drives the ScrollController
+/// from touch drag gestures, working around xterm's gesture arena blocking
+/// touch scrolling on mobile.
+class _TouchScrollableTerminal extends StatefulWidget {
+  final Terminal terminal;
+  const _TouchScrollableTerminal({required this.terminal});
+
+  @override
+  State<_TouchScrollableTerminal> createState() =>
+      _TouchScrollableTerminalState();
+}
+
+class _TouchScrollableTerminalState extends State<_TouchScrollableTerminal> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onVerticalDragUpdate(DragUpdateDetails details) {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    final newOffset = (pos.pixels - details.delta.dy)
+        .clamp(pos.minScrollExtent, pos.maxScrollExtent);
+    if (newOffset != pos.pixels) {
+      _scrollController.jumpTo(newOffset);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RawGestureDetector(
+      gestures: <Type, GestureRecognizerFactory>{
+        VerticalDragGestureRecognizer:
+            GestureRecognizerFactoryWithHandlers<VerticalDragGestureRecognizer>(
+          () => VerticalDragGestureRecognizer()
+            ..supportedDevices = {ui.PointerDeviceKind.touch},
+          (VerticalDragGestureRecognizer instance) {
+            instance.onUpdate = _onVerticalDragUpdate;
+          },
+        ),
+      },
+      child: TerminalView(
+        widget.terminal,
+        autofocus: true,
+        simulateScroll: false,
+        scrollController: _scrollController,
+        padding: const EdgeInsets.symmetric(horizontal: 4),
       ),
     );
   }

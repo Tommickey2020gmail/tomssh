@@ -10,6 +10,8 @@ class SSHService {
   StreamSubscription? _stdoutSubscription;
   bool _isConnected = false;
   bool _manualDisconnect = false;
+  int? _lastWidth;
+  int? _lastHeight;
 
   bool get isConnected => _isConnected;
 
@@ -44,8 +46,9 @@ class SSHService {
 
       _shell = await _client!.shell(
         pty: SSHPtyConfig(
-          width: 80,
-          height: 24,
+          type: 'xterm-256color',
+          width: _lastWidth ?? 80,
+          height: _lastHeight ?? 24,
         ),
       );
 
@@ -72,6 +75,8 @@ class SSHService {
   }
 
   void resizeTerminal(int width, int height) {
+    _lastWidth = width;
+    _lastHeight = height;
     _shell?.resizeTerminal(width, height);
   }
 

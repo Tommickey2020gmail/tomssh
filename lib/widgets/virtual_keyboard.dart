@@ -115,6 +115,7 @@ class _VirtualKeyboardState extends State<VirtualKeyboard> {
                 _modifierButton('Alt', _alt, () => setState(() => _alt = !_alt)),
                 _modifierButton('Shift', _shift, () => setState(() => _shift = !_shift)),
                 const SizedBox(width: 4),
+                _keyButton('Enter', onTap: () => _sendKey(TerminalKey.enter)),
                 _keyButton('Esc', onTap: () => _sendKey(TerminalKey.escape)),
                 _keyButton('Tab', onTap: () => _sendKey(TerminalKey.tab)),
                 _keyButton('|', onTap: () => _sendChar('|')),
