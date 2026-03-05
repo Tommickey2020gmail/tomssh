@@ -1,35 +1,73 @@
 import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart';
 
+/// Shared modifier key state between virtual keyboard and terminal input.
+class KeyboardModifiers {
+  bool ctrl = false;
+  bool alt = false;
+  bool shift = false;
+
+  /// If Ctrl is active, convert [data] from system keyboard to control sequence.
+  /// Returns null if no modifier was applied.
+  String? applyModifiers(String data) {
+    if (!ctrl && !alt) return null;
+
+    final buf = StringBuffer();
+    for (final codeUnit in data.codeUnits) {
+      if (ctrl && codeUnit >= 0x61 && codeUnit <= 0x7A) {
+        // Ctrl + a-z → \x01-\x1A
+        buf.writeCharCode(codeUnit - 0x60);
+      } else if (ctrl && codeUnit >= 0x41 && codeUnit <= 0x5A) {
+        // Ctrl + A-Z → \x01-\x1A
+        buf.writeCharCode(codeUnit - 0x40);
+      } else if (alt) {
+        // Alt + key → ESC prefix
+        buf.writeCharCode(0x1B);
+        buf.writeCharCode(codeUnit);
+      } else {
+        buf.writeCharCode(codeUnit);
+      }
+    }
+    ctrl = false;
+    alt = false;
+    shift = false;
+    return buf.toString();
+  }
+
+  void reset() {
+    ctrl = false;
+    alt = false;
+    shift = false;
+  }
+}
+
 /// A toolbar providing special keys not available on mobile soft keyboards.
 /// Supports Ctrl/Alt/Shift as sticky modifiers and common terminal keys.
 class VirtualKeyboard extends StatefulWidget {
   final Terminal terminal;
-  const VirtualKeyboard({super.key, required this.terminal});
+  final KeyboardModifiers modifiers;
+  const VirtualKeyboard({
+    super.key,
+    required this.terminal,
+    required this.modifiers,
+  });
 
   @override
   State<VirtualKeyboard> createState() => _VirtualKeyboardState();
 }
 
 class _VirtualKeyboardState extends State<VirtualKeyboard> {
-  bool _ctrl = false;
-  bool _alt = false;
-  bool _shift = false;
   bool _showFnKeys = false;
 
+  KeyboardModifiers get _mod => widget.modifiers;
+
   void _sendKey(TerminalKey key) {
-    widget.terminal.keyInput(key, ctrl: _ctrl, alt: _alt, shift: _shift);
-    // Reset modifiers after sending a non-modifier key
-    setState(() {
-      _ctrl = false;
-      _alt = false;
-      _shift = false;
-    });
+    widget.terminal.keyInput(key, ctrl: _mod.ctrl, alt: _mod.alt, shift: _mod.shift);
+    setState(() => _mod.reset());
   }
 
   void _sendChar(String char) {
-    if (_ctrl || _alt) {
-      // Map character to TerminalKey for modifier combos
+    if (_mod.ctrl || _mod.alt) {
       final keyMap = <String, TerminalKey>{
         'a': TerminalKey.keyA, 'b': TerminalKey.keyB, 'c': TerminalKey.keyC,
         'd': TerminalKey.keyD, 'e': TerminalKey.keyE, 'f': TerminalKey.keyF,
@@ -48,11 +86,7 @@ class _VirtualKeyboardState extends State<VirtualKeyboard> {
       }
     }
     widget.terminal.textInput(char);
-    setState(() {
-      _ctrl = false;
-      _alt = false;
-      _shift = false;
-    });
+    setState(() => _mod.reset());
   }
 
   Widget _modifierButton(String label, bool active, VoidCallback onTap) {
@@ -111,9 +145,9 @@ class _VirtualKeyboardState extends State<VirtualKeyboard> {
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
             child: Row(
               children: [
-                _modifierButton('Ctrl', _ctrl, () => setState(() => _ctrl = !_ctrl)),
-                _modifierButton('Alt', _alt, () => setState(() => _alt = !_alt)),
-                _modifierButton('Shift', _shift, () => setState(() => _shift = !_shift)),
+                _modifierButton('Ctrl', _mod.ctrl, () => setState(() => _mod.ctrl = !_mod.ctrl)),
+                _modifierButton('Alt', _mod.alt, () => setState(() => _mod.alt = !_mod.alt)),
+                _modifierButton('Shift', _mod.shift, () => setState(() => _mod.shift = !_mod.shift)),
                 const SizedBox(width: 4),
                 _keyButton('Enter', onTap: () => _sendKey(TerminalKey.enter)),
                 _keyButton('Esc', onTap: () => _sendKey(TerminalKey.escape)),

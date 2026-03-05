@@ -19,6 +19,7 @@ class _TerminalTab {
   final Terminal terminal;
   final SSHService ssh;
   final SessionLogService logService;
+  final KeyboardModifiers modifiers = KeyboardModifiers();
   String status;
   int reconnectAttempts;
   Timer? reconnectTimer;
@@ -133,8 +134,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     });
 
     // Wire terminal output (user keystrokes) to SSH.
+    // Apply virtual keyboard modifiers (Ctrl/Alt) to system keyboard input.
     terminal.onOutput = (data) {
-      ssh.write(data);
+      final modified = tab.modifiers.applyModifiers(data);
+      ssh.write(modified ?? data);
     };
 
     // Wire terminal resize events to SSH.
@@ -261,6 +264,19 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     setState(() {
       _rebuildTabController(newIndex: newIndex);
     });
+  }
+
+  /// Shows the terminal buffer history in a full-screen dialog.
+  void _showHistory() {
+    if (_tabs.isEmpty) return;
+    final tab = _tabs[_safeIndex];
+    final text = tab.terminal.buffer.getText();
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (ctx) => _HistoryViewer(text: text, title: tab.server.name),
+      ),
+    );
   }
 
   /// Shows the quick commands bottom sheet and sends selected command.
@@ -398,6 +414,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
         title: Text(currentTab.server.name),
         actions: [
           IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: '历史记录',
+            onPressed: _showHistory,
+          ),
+          IconButton(
             icon: const Icon(Icons.edit_note),
             tooltip: '大段文本输入',
             onPressed: _showTextInput,
@@ -460,7 +481,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
               }).toList(),
             ),
           ),
-          VirtualKeyboard(terminal: currentTab.terminal),
+          VirtualKeyboard(terminal: currentTab.terminal, modifiers: currentTab.modifiers),
         ],
       ),
     );
@@ -517,6 +538,186 @@ class _TouchScrollableTerminalState extends State<_TouchScrollableTerminal> {
         simulateScroll: false,
         scrollController: _scrollController,
         padding: const EdgeInsets.symmetric(horizontal: 4),
+      ),
+    );
+  }
+}
+
+/// Full-screen viewer for terminal buffer history with search support.
+class _HistoryViewer extends StatefulWidget {
+  final String text;
+  final String title;
+  const _HistoryViewer({required this.text, required this.title});
+
+  @override
+  State<_HistoryViewer> createState() => _HistoryViewerState();
+}
+
+class _HistoryViewerState extends State<_HistoryViewer> {
+  final ScrollController _scrollController = ScrollController();
+  bool _searching = false;
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: _searching
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  hintText: '搜索...',
+                  hintStyle: TextStyle(color: Colors.white54),
+                  border: InputBorder.none,
+                ),
+                onChanged: (v) => setState(() => _searchQuery = v),
+              )
+            : Text('${widget.title} - 历史记录'),
+        actions: [
+          IconButton(
+            icon: Icon(_searching ? Icons.close : Icons.search),
+            onPressed: () {
+              setState(() {
+                if (_searching) {
+                  _searchController.clear();
+                  _searchQuery = '';
+                }
+                _searching = !_searching;
+              });
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.vertical_align_bottom),
+            tooltip: '跳到底部',
+            onPressed: () {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (_scrollController.hasClients) {
+                  _scrollController.jumpTo(
+                    _scrollController.position.maxScrollExtent,
+                  );
+                }
+              });
+            },
+          ),
+        ],
+      ),
+      body: _buildContent(),
+    );
+  }
+
+  Widget _buildContent() {
+    final lines = widget.text.split('\n');
+
+    if (_searchQuery.isEmpty) {
+      return ListView.builder(
+        controller: _scrollController,
+        itemCount: lines.length,
+        padding: const EdgeInsets.all(8),
+        itemBuilder: (ctx, i) {
+          return Text(
+            lines[i],
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 13,
+              height: 1.3,
+            ),
+          );
+        },
+      );
+    }
+
+    // Filter lines that match the search query
+    final queryLower = _searchQuery.toLowerCase();
+    final matched = <int>[];
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].toLowerCase().contains(queryLower)) {
+        matched.add(i);
+      }
+    }
+
+    if (matched.isEmpty) {
+      return const Center(child: Text('没有找到匹配内容'));
+    }
+
+    return ListView.builder(
+      controller: _scrollController,
+      itemCount: matched.length,
+      padding: const EdgeInsets.all(8),
+      itemBuilder: (ctx, i) {
+        final lineIndex = matched[i];
+        final line = lines[lineIndex];
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 1),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 48,
+                child: Text(
+                  '${lineIndex + 1}',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    color: Colors.grey[500],
+                  ),
+                ),
+              ),
+              Expanded(
+                child: _highlightText(line, _searchQuery),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _highlightText(String text, String query) {
+    if (query.isEmpty) {
+      return Text(
+        text,
+        style: const TextStyle(fontFamily: 'monospace', fontSize: 13, height: 1.3),
+      );
+    }
+
+    final spans = <TextSpan>[];
+    final lowerText = text.toLowerCase();
+    final lowerQuery = query.toLowerCase();
+    var start = 0;
+
+    while (true) {
+      final idx = lowerText.indexOf(lowerQuery, start);
+      if (idx == -1) {
+        spans.add(TextSpan(text: text.substring(start)));
+        break;
+      }
+      if (idx > start) {
+        spans.add(TextSpan(text: text.substring(start, idx)));
+      }
+      spans.add(TextSpan(
+        text: text.substring(idx, idx + query.length),
+        style: const TextStyle(
+          backgroundColor: Colors.yellow,
+          color: Colors.black,
+        ),
+      ));
+      start = idx + query.length;
+    }
+
+    return RichText(
+      text: TextSpan(
+        style: const TextStyle(fontFamily: 'monospace', fontSize: 13, height: 1.3),
+        children: spans,
       ),
     );
   }
